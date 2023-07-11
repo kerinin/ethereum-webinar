@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hashicorp/go-retryablehttp"
 	eth "github.com/kerinin/ethereum-webinar"
 	"github.com/segmentio/parquet-go"
 	"github.com/segmentio/parquet-go/compress/snappy"
@@ -38,9 +39,18 @@ func main() {
 	url := fmt.Sprintf("https://nft.api.infura.io/networks/%s/nfts/transfers", *network)
 
 	transferBatch := make([]eth.NFTTransfer, 0, *batchSize)
+	defer func() {
+		if len(transferBatch) > 0 {
+			err := parquet.WriteFile(fmt.Sprintf("transfers_%d.parquet", time.Now().Unix()), transferBatch, parquet.Compression(&snappy.Codec{}))
+			if err != nil {
+				log.Fatalf("Failed to write parquet: %s", err)
+			}
+			fmt.Printf("Wrote batch of %d transfers to Parquet\n", len(transferBatch))
+		}
+	}()
 
 	for {
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := retryablehttp.NewRequest("GET", url, nil)
 		if err != nil {
 			fmt.Println("Failed to create request:", err)
 			return
@@ -55,7 +65,7 @@ func main() {
 		req.Header.Set("Content-Type", "application/json")
 		req.SetBasicAuth(*key, *secret)
 
-		client := &http.Client{}
+		client := retryablehttp.NewClient()
 		resp, err := client.Do(req)
 		if err != nil {
 			fmt.Println("Failed to send request:", err)
@@ -108,12 +118,5 @@ func main() {
 			break
 		}
 		cursor = transferResponse.Cursor
-	}
-	if len(transferBatch) > 0 {
-		err := parquet.WriteFile(fmt.Sprintf("transfers_%d.parquet", time.Now().Unix()), transferBatch, parquet.Compression(&snappy.Codec{}))
-		if err != nil {
-			log.Fatalf("Failed to write parquet: %s", err)
-		}
-		fmt.Printf("Wrote batch of %d transfers to Parquet\n", len(transferBatch))
 	}
 }
