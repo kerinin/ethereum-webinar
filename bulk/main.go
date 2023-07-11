@@ -1,12 +1,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
+	"time"
+
+	eth "github.com/kerinin/ethereum-webinar"
+	"github.com/segmentio/parquet-go"
+	"github.com/segmentio/parquet-go/compress/snappy"
 )
 
 var (
@@ -15,35 +24,20 @@ var (
 	network   = flag.String("network", "1", "Ethereum network")
 	startFlag = flag.Int("start", 0, "initial block")
 	endFlag   = flag.Int("end", 18_000_000, "final block")
+	batchSize = flag.Int("batch", 100_000, "batch size before writing to Parquet file")
 )
-
-type NFTTransfer struct {
-	TokenAddress    string `json:"tokenAddress"`
-	TokenID         string `json:"tokenId"`
-	FromAddress     string `json:"fromAddress"`
-	ToAddress       string `json:"toAddress"`
-	ContractType    string `json:"contractType"`
-	Price           string `json:"price"`
-	Quantity        string `json:"quantity"`
-	BlockNumber     string `json:"blockNumber"`
-	BlockTimestamp  string `json:"blockTimestamp"`
-	TransactionType string `json:"transactionType"`
-}
-
-type NFTTransferResponse struct {
-	PageSize   int           `json:"pageSize"`
-	PageNumber int           `json:"pageNumber"`
-	Cursor     string        `json:"cursor"`
-	Transfers  []NFTTransfer `json:"transfers"`
-}
 
 func main() {
 	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	cursor := flag.Arg(1)
 
 	// Make the API request
 	url := fmt.Sprintf("https://nft.api.infura.io/networks/%s/nfts/transfers", *network)
+
+	transferBatch := make([]eth.NFTTransfer, 0, *batchSize)
 
 	for {
 		req, err := http.NewRequest("GET", url, nil)
@@ -82,7 +76,7 @@ func main() {
 		}
 
 		// Parse the response
-		var transferResponse NFTTransferResponse
+		var transferResponse eth.NFTTransferResponse
 		err = json.Unmarshal(body, &transferResponse)
 		if err != nil {
 			fmt.Println("Failed to parse response body:", err)
@@ -94,11 +88,32 @@ func main() {
 		}
 
 		lastTransfer := transferResponse.Transfers[len(transferResponse.Transfers)-1]
+
+		transferBatch = append(transferBatch, transferResponse.Transfers...)
+		if len(transferBatch) >= *batchSize {
+			err := parquet.WriteFile(fmt.Sprintf("transfers_%d.parquet", time.Now().Unix()), transferBatch, parquet.Compression(&snappy.Codec{}))
+			if err != nil {
+				log.Fatalf("Failed to write parquet: %s", err)
+			}
+			fmt.Printf("Wrote batch of %d transfers to Parquet\n", len(transferBatch))
+			transferBatch = transferBatch[:0]
+		}
+
 		fmt.Printf("%d txns with cursor %s @ %s\n", len(transferResponse.Transfers), lastTransfer.BlockNumber, lastTransfer.BlockTimestamp)
 		if transferResponse.Cursor == "" {
 			fmt.Println("---")
 			break
 		}
+		if ctx.Err() != nil {
+			break
+		}
 		cursor = transferResponse.Cursor
+	}
+	if len(transferBatch) > 0 {
+		err := parquet.WriteFile(fmt.Sprintf("transfers_%d.parquet", time.Now().Unix()), transferBatch, parquet.Compression(&snappy.Codec{}))
+		if err != nil {
+			log.Fatalf("Failed to write parquet: %s", err)
+		}
+		fmt.Printf("Wrote batch of %d transfers to Parquet\n", len(transferBatch))
 	}
 }

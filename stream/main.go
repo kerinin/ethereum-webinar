@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	eth "github.com/kerinin/ethereum-webinar"
 )
 
 var (
@@ -19,26 +20,6 @@ var (
 	secret  = flag.String("secret", "", "Infura API secret")
 	network = flag.String("network", "1", "Ethereum network")
 )
-
-type NFTTransfer struct {
-	TokenAddress    string `json:"tokenAddress"`
-	TokenID         string `json:"tokenId"`
-	FromAddress     string `json:"fromAddress"`
-	ToAddress       string `json:"toAddress"`
-	ContractType    string `json:"contractType"`
-	Price           string `json:"price"`
-	Quantity        string `json:"quantity"`
-	BlockNumber     string `json:"blockNumber"`
-	BlockTimestamp  string `json:"blockTimestamp"`
-	TransactionType string `json:"transactionType"`
-}
-
-type NFTTransferResponse struct {
-	PageSize   int           `json:"pageSize"`
-	PageNumber int           `json:"pageNumber"`
-	Cursor     string        `json:"cursor"`
-	Transfers  []NFTTransfer `json:"transfers"`
-}
 
 func main() {
 	flag.Parse()
@@ -107,7 +88,7 @@ func main() {
 				}
 
 				// Parse the response
-				var transferResponse NFTTransferResponse
+				var transferResponse eth.NFTTransferResponse
 				err = json.Unmarshal(body, &transferResponse)
 				if err != nil {
 					fmt.Println("Failed to parse response body:", err)
