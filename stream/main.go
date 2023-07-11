@@ -47,8 +47,10 @@ func main() {
 	}
 	fmt.Printf("Partitions for topic %s: %v\n", *topicName, p)
 
+	schema := "<avro schema def string"
 	producer, err := pulsarClient.CreateProducer(pulsar.ProducerOptions{
-		Topic: *topicName,
+		Topic:  *topicName,
+		Schema: pulsar.NewAvroSchema(schema, nil),
 	})
 	if err != nil {
 		log.Fatalf("Failed to create pulsar producer: %s", err)
