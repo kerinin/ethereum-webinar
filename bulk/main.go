@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/hashicorp/go-retryablehttp"
 	eth "github.com/kerinin/ethereum-webinar"
+	jsontime "github.com/liamylian/jsontime/v2/v2"
 	"github.com/segmentio/parquet-go"
 	"github.com/segmentio/parquet-go/compress/snappy"
 )
@@ -26,14 +26,14 @@ var (
 	startFlag = flag.Int("start", 0, "initial block")
 	endFlag   = flag.Int("end", 18_000_000, "final block")
 	batchSize = flag.Int("batch", 100_000, "batch size before writing to Parquet file")
+	cursor    = flag.String("cursor", "", "(Optional) Cursor to resume from")
+	json      = jsontime.ConfigWithCustomTimeFormat
 )
 
 func main() {
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-
-	cursor := flag.Arg(1)
 
 	// Make the API request
 	url := fmt.Sprintf("https://nft.api.infura.io/networks/%s/nfts/transfers", *network)
@@ -58,8 +58,8 @@ func main() {
 		q := req.URL.Query()
 		q.Add("fromBlock", strconv.Itoa(*startFlag))
 		q.Add("toBlock", strconv.Itoa(*endFlag))
-		if cursor != "" {
-			q.Add("cursor", cursor)
+		if *cursor != "" {
+			q.Add("cursor", *cursor)
 		}
 		req.URL.RawQuery = q.Encode()
 		req.Header.Set("Content-Type", "application/json")
@@ -79,6 +79,10 @@ func main() {
 			return
 		}
 
+		if resp.StatusCode == http.StatusBadRequest {
+			fmt.Println("API request failed with status (retrying):", resp.StatusCode)
+			continue
+		}
 		if resp.StatusCode != http.StatusOK {
 			fmt.Println("API request failed with status:", resp.StatusCode)
 			fmt.Println("Response:", string(body))
@@ -117,6 +121,6 @@ func main() {
 		if ctx.Err() != nil {
 			break
 		}
-		cursor = transferResponse.Cursor
+		*cursor = transferResponse.Cursor
 	}
 }

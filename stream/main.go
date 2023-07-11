@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -10,21 +9,51 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	eth "github.com/kerinin/ethereum-webinar"
+	jsontime "github.com/liamylian/jsontime/v2/v2"
 )
 
 var (
-	key     = flag.String("key", "", "Infura API key")
-	secret  = flag.String("secret", "", "Infura API secret")
-	network = flag.String("network", "1", "Ethereum network")
+	key              = flag.String("key", "", "Infura API key")
+	secret           = flag.String("secret", "", "Infura API secret")
+	network          = flag.String("network", "1", "Ethereum network")
+	brokerServiceUrl = flag.String("broker-service-url", "pulsar+ssl://pulsar-gcp-useast1.streaming.datastax.com:6651", "The Pulsar URL to produce new events to")
+	// authPlugin       = flag.String("auth-plugin", "org.apache.pulsar.client.impl.auth.AuthenticationToken", "The Pulsar auth plugin to use")
+	token     = flag.String("token", "", "The Pulsar auth token to send")
+	topicName = flag.String("topic-name", "persistent://ethereum-webinar/default/token_transfers", "The Pulsar topic to write to")
+	json      = jsontime.ConfigWithCustomTimeFormat
 )
 
 func main() {
 	flag.Parse()
 
 	cursor := flag.Arg(1)
+
+	pulsarClient, err := pulsar.NewClient(pulsar.ClientOptions{
+		URL:            *brokerServiceUrl,
+		Authentication: pulsar.NewAuthenticationToken(*token),
+	})
+	if err != nil {
+		log.Fatalf("Failed to create pulsar client: %s", err)
+	}
+	defer pulsarClient.Close()
+
+	p, err := pulsarClient.TopicPartitions(*topicName)
+	if err != nil {
+		log.Fatalf("Failed to get topic partitions: %s", err)
+	}
+	fmt.Printf("Partitions for topic %s: %v\n", *topicName, p)
+
+	producer, err := pulsarClient.CreateProducer(pulsar.ProducerOptions{
+		Topic: *topicName,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create pulsar producer: %s", err)
+	}
+	defer producer.Close()
 
 	url := fmt.Sprintf("wss://mainnet.infura.io/ws/v3/%s", *key)
 	client, err := ethclient.Dial(url)
@@ -97,6 +126,20 @@ func main() {
 
 				if len(transferResponse.Transfers) == 0 {
 					break
+				}
+
+				for _, transfer := range transferResponse.Transfers {
+					_, err = producer.Send(context.Background(), &pulsar.ProducerMessage{
+						Value:     transfer,
+						EventTime: transfer.BlockTimestamp,
+					})
+					if err != nil {
+						log.Fatalf("Failed to write to Pulsar: %s", err)
+					}
+				}
+				err = producer.Flush()
+				if err != nil {
+					log.Fatalf("Failed to flush Pulsar prodcuer")
 				}
 
 				lastTransfer := transferResponse.Transfers[len(transferResponse.Transfers)-1]
